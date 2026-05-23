@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Connect to server",
+      "type": "go",
+      "mode": "debug",
+      "request": "launch",
+      "program": "${workspaceFolder}",
+      "env": {},
+      "args": [],
+      "showLog": false,
+      "trace": "verbose"
+    }
+  ]
+}
