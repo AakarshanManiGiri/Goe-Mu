@@ -1,41 +1,16 @@
 package cpu
 
-import (
-	"errors"
-
-	"goe-mu/memory"
-)
-
-const demoProgramAddress uint32 = 0x02000000
-
-type Processor struct {
-	Memory *memory.MemoryBus
-	PC     uint32
-	Clock  uint64
+func NewARM9(bus MemoryInterface) *CPU {
+	cpu := NewCPU(true, bus)
+	cpu.Reset()
+	return cpu
 }
 
-func NewProcessor(mem *memory.MemoryBus) (*Processor, error) {
-	if mem == nil {
-		return nil, errors.New("cpu: memory bus is required")
-	}
-
-	processor := &Processor{Memory: mem}
-	processor.Reset()
-	return processor, nil
-}
-
-func (p *Processor) Reset() {
-	p.PC = demoProgramAddress
-	p.Clock = 0
-}
-
-func (p *Processor) Step() (uint32, error) {
-	if p.Memory == nil {
-		return 0, errors.New("cpu: memory bus is nil")
-	}
-
-	opcode := p.Memory.Read32(p.PC)
-	p.PC += 4
-	p.Clock++
-	return opcode, nil
+func (c *CPU) Reset() {
+	// Initialize mode to System or Supervisor depending on standard NDS boot
+	c.CPSR = 0x000000DF // System mode, ARM state, IRQ/FIQ disabled
+	
+	// Default PC for demo
+	c.R[15] = 0x02000000
+	c.Cycles = 0
 }

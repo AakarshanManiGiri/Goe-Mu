@@ -12,7 +12,8 @@ import (
 )
 
 type NDS struct {
-	CPU        *cpu.Processor
+	ARM9       *cpu.CPU
+	ARM7       *cpu.CPU
 	Memory     *memory.MemoryBus
 	GPU        *gpu.GPU
 	Input      *input.Controller
@@ -30,11 +31,8 @@ func NewNDS() (*NDS, error) {
 		FrameCount: 0,
 	}
 
-	var err error
-	nds.CPU, err = cpu.NewProcessor(nds.Memory)
-	if err != nil {
-		return nil, err
-	}
+	nds.ARM9 = cpu.NewARM9(nds.Memory)
+	nds.ARM7 = cpu.NewARM7(nds.Memory)
 
 	return nds, nil
 }
@@ -49,27 +47,26 @@ func (n *NDS) LoadCartridge(path string) error {
 }
 
 func (n *NDS) Run() error {
-	if n.CPU == nil || n.Memory == nil {
+	if n.ARM9 == nil || n.Memory == nil {
 		return errors.New("system: emulator is not initialized")
 	}
 
 	n.Running = true
 
-	const demoOpcode uint32 = 0xE1A00000
+	const demoOpcode uint32 = 0xE1A00000 // NOP
 	n.Memory.Write32(0x02000000, demoOpcode)
-	n.CPU.Reset()
+	n.ARM9.Reset()
+	n.ARM7.Reset()
 
-	opcode, err := n.CPU.Step()
-	if err != nil {
-		return err
-	}
+	// Step the ARM9
+	n.ARM9.Step()
 
 	if n.GPU != nil {
 		n.GPU.UpdateFrame()
 	}
 	n.FrameCount++
 
-	log.Printf("demo step: pc=%08x opcode=%08x", n.CPU.PC-4, opcode)
+	log.Printf("demo step complete")
 
 	n.Stop()
 
