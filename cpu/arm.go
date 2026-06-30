@@ -1,7 +1,7 @@
 package cpu
 
 import (
-	"log"
+	"fmt"
 )
 
 const (
@@ -70,18 +70,244 @@ func NewCPU(isARM9 bool, bus MemoryInterface) *CPU {
 func (c *CPU) initLUTs() {
 	for i := 0; i < 4096; i++ {
 		c.ARMLUT[i] = c.unimplementedARM
+		if (i >> 9) == 0b101 {
+			c.ARMLUT[i] = c.handleBranch
+		}
+		if (i >> 10) == 0b00 {
+			c.ARMLUT[i] = c.handleDataProcessing
+		}
+		if (i >> 10) == 0b01 {
+			c.ARMLUT[i] = c.handleSingleDataTransfer
+		}
+		if (i >> 9) == 0b100 {
+			c.ARMLUT[i] = c.handleBlockDataTransfer
+		}
 	}
 	for i := 0; i < 1024; i++ {
 		c.THUMBLUT[i] = c.unimplementedTHUMB
+		// Format 18 (Unconditional branch): 11100 -> i >> 5 == 0b11100
+		if (i >> 5) == 0b11100 {
+			c.THUMBLUT[i] = c.handleThumbBranch
+		}
+	}
+}
+
+func (c *CPU) handleBranch(opcode uint32) {
+	link := (opcode & (1 << 24)) != 0
+	offset := opcode & 0x00FFFFFF
+	if (offset & 0x00800000) != 0 {
+		offset |= 0xFF000000
+	}
+	if link {
+		c.R[14] = c.R[15]
+	}
+	c.R[15] = c.R[15] + (offset << 2)
+}
+
+func (c *CPU) handleDataProcessing(opcode uint32) {
+	isImmediate := (opcode & (1 << 25)) != 0
+	op := (opcode >> 21) & 0xF
+	setFlags := (opcode & (1 << 20)) != 0
+	rn := (opcode >> 16) & 0xF
+	rd := (opcode >> 12) & 0xF
+
+	var op2 uint32
+	if isImmediate {
+		imm := opcode & 0xFF
+		rotate := (opcode >> 8) & 0xF
+		shift := rotate * 2
+		op2 = (imm >> shift) | (imm << (32 - shift))
+	} else {
+		rm := opcode & 0xF
+		op2 = c.R[rm]
+	}
+
+	op1 := c.R[rn]
+	var res uint32
+
+	switch op {
+	case 0x0:
+		res = op1 & op2 // AND
+	case 0x1:
+		res = op1 ^ op2 // EOR
+	case 0x2:
+		res = op1 - op2 // SUB
+	case 0x3:
+		res = op2 - op1 // RSB
+	case 0x4:
+		res = op1 + op2 // ADD
+	case 0x8:
+		res = op1 & op2 // TST
+	case 0x9:
+		res = op1 ^ op2 // TEQ
+	case 0xA:
+		res = op1 - op2 // CMP
+	case 0xB:
+		res = op1 + op2 // CMN
+	case 0xC:
+		res = op1 | op2 // ORR
+	case 0xD:
+		res = op2 // MOV
+	case 0xE:
+		res = op1 & (^op2) // BIC
+	case 0xF:
+		res = ^op2 // MVN
+	default:
+		res = 0
+	}
+
+	if op != 0x8 && op != 0x9 && op != 0xA && op != 0xB {
+		c.R[rd] = res
+	}
+
+	if setFlags {
+		if res == 0 {
+			c.CPSR |= 0x40000000 // Z
+		} else {
+			c.CPSR &^= 0x40000000
+		}
+		if (res & 0x80000000) != 0 {
+			c.CPSR |= 0x80000000 // N
+		} else {
+			c.CPSR &^= 0x80000000
+		}
 	}
 }
 
 func (c *CPU) unimplementedARM(opcode uint32) {
-	log.Fatalf("Unimplemented ARM opcode: %08X at PC: %08X", opcode, c.R[15]-8)
+	panic(fmt.Sprintf("Unimplemented ARM opcode: %08X at PC: %08X", opcode, c.R[15]-8))
 }
 
 func (c *CPU) unimplementedTHUMB(opcode uint16) {
-	log.Fatalf("Unimplemented THUMB opcode: %04X at PC: %08X", opcode, c.R[15]-4)
+	panic(fmt.Sprintf("Unimplemented THUMB opcode: %04X at PC: %08X", opcode, c.R[15]-4))
+}
+
+func (c *CPU) handleThumbBranch(opcode uint16) {
+	// Format 18: B offset
+	offset := uint32(opcode & 0x7FF)
+	if (offset & 0x400) != 0 {
+		offset |= 0xFFFFF800 // sign extend
+	}
+	offset <<= 1
+	c.R[15] = c.R[15] + offset
+}
+
+func (c *CPU) handleSingleDataTransfer(opcode uint32) {
+	iBit := (opcode & (1 << 25)) != 0
+	pBit := (opcode & (1 << 24)) != 0
+	uBit := (opcode & (1 << 23)) != 0
+	bBit := (opcode & (1 << 22)) != 0
+	wBit := (opcode & (1 << 21)) != 0
+	lBit := (opcode & (1 << 20)) != 0
+
+	rn := (opcode >> 16) & 0xF
+	rd := (opcode >> 12) & 0xF
+
+	var offset uint32
+	if !iBit {
+		offset = opcode & 0xFFF
+	} else {
+		rm := opcode & 0xF
+		offset = c.R[rm]
+	}
+
+	address := c.R[rn]
+	if rn == 15 {
+		address += 8
+	}
+
+	var effAddr uint32
+	if pBit {
+		if uBit {
+			effAddr = address + offset
+		} else {
+			effAddr = address - offset
+		}
+	} else {
+		effAddr = address
+	}
+
+	if lBit { // Load
+		if bBit {
+			c.R[rd] = uint32(c.Bus.Read8(effAddr))
+		} else {
+			c.R[rd] = c.Bus.Read32(effAddr & 0xFFFFFFFC)
+		}
+	} else { // Store
+		val := c.R[rd]
+		if rd == 15 {
+			val += 12
+		}
+		if bBit {
+			c.Bus.Write8(effAddr, byte(val))
+		} else {
+			c.Bus.Write32(effAddr&0xFFFFFFFC, val)
+		}
+	}
+
+	if (!pBit) || wBit {
+		if uBit {
+			c.R[rn] = address + offset
+		} else {
+			c.R[rn] = address - offset
+		}
+	}
+}
+
+func (c *CPU) handleBlockDataTransfer(opcode uint32) {
+	pBit := (opcode & (1 << 24)) != 0
+	uBit := (opcode & (1 << 23)) != 0
+	wBit := (opcode & (1 << 21)) != 0
+	lBit := (opcode & (1 << 20)) != 0
+
+	rn := (opcode >> 16) & 0xF
+	regList := opcode & 0xFFFF
+
+	address := c.R[rn]
+
+	numBits := 0
+	for i := 0; i < 16; i++ {
+		if (regList & (1 << i)) != 0 {
+			numBits++
+		}
+	}
+
+	var startAddr uint32
+	if uBit {
+		startAddr = address
+		if pBit {
+			startAddr += 4
+		}
+	} else {
+		startAddr = address - uint32(numBits*4)
+		if !pBit {
+			startAddr += 4
+		}
+	}
+
+	addr := startAddr
+	for i := 0; i < 16; i++ {
+		if (regList & (1 << i)) != 0 {
+			if lBit { // LDM
+				c.R[i] = c.Bus.Read32(addr & 0xFFFFFFFC)
+			} else { // STM
+				val := c.R[i]
+				if i == 15 {
+					val += 12
+				}
+				c.Bus.Write32(addr&0xFFFFFFFC, val)
+			}
+			addr += 4
+		}
+	}
+
+	if wBit {
+		if uBit {
+			c.R[rn] = address + uint32(numBits*4)
+		} else {
+			c.R[rn] = address - uint32(numBits*4)
+		}
+	}
 }
 
 func (c *CPU) Step() {
@@ -96,7 +322,7 @@ func (c *CPU) Step() {
 	} else {
 		opcode := c.Bus.Read32(c.R[15])
 		c.R[15] += 4
-		
+
 		// Condition code check (top 4 bits)
 		if !c.checkCondition(opcode >> 28) {
 			return
@@ -116,22 +342,38 @@ func (c *CPU) checkCondition(cond uint32) bool {
 	v := (c.CPSR & 0x10000000) != 0
 
 	switch cond {
-	case 0x0: return z
-	case 0x1: return !z
-	case 0x2: return c_flag
-	case 0x3: return !c_flag
-	case 0x4: return n
-	case 0x5: return !n
-	case 0x6: return v
-	case 0x7: return !v
-	case 0x8: return c_flag && !z
-	case 0x9: return !c_flag || z
-	case 0xA: return n == v
-	case 0xB: return n != v
-	case 0xC: return !z && (n == v)
-	case 0xD: return z || (n != v)
-	case 0xE: return true
-	case 0xF: return false // Actually depends on ARM version, mostly false for execution
+	case 0x0:
+		return z
+	case 0x1:
+		return !z
+	case 0x2:
+		return c_flag
+	case 0x3:
+		return !c_flag
+	case 0x4:
+		return n
+	case 0x5:
+		return !n
+	case 0x6:
+		return v
+	case 0x7:
+		return !v
+	case 0x8:
+		return c_flag && !z
+	case 0x9:
+		return !c_flag || z
+	case 0xA:
+		return n == v
+	case 0xB:
+		return n != v
+	case 0xC:
+		return !z && (n == v)
+	case 0xD:
+		return z || (n != v)
+	case 0xE:
+		return true
+	case 0xF:
+		return false // Actually depends on ARM version, mostly false for execution
 	}
 	return false
 }

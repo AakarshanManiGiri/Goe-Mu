@@ -1,6 +1,9 @@
 package memory
 
-const mainMemoryBase uint32 = 0x02000000
+const (
+	mainMemoryBase uint32 = 0x02000000
+	vramBase       uint32 = 0x06000000
+)
 
 // MemoryBus manages all memory operations in the NDS
 type MemoryBus struct {
@@ -8,16 +11,37 @@ type MemoryBus struct {
 	ARM9DTCM   [16 * 1024]byte
 	SharedWRAM [96 * 1024]byte
 	MainMemory [4 * 1024 * 1024]byte
-	VRAM       [656 * 1024]byte
-	OAM        [2 * 1024]byte
+	VRAM       []byte
+	OAM        []byte
 	IORegs     [0x1000]byte
+	ReadJoypad func() uint16
 }
 
-func NewMemoryBus() *MemoryBus {
-	return &MemoryBus{}
+func NewMemoryBus(vram []byte, oam []byte) *MemoryBus {
+	return &MemoryBus{
+		VRAM: vram,
+		OAM:  oam,
+	}
 }
 
 func (m *MemoryBus) Read8(address uint32) byte {
+	if address == 0x04000130 {
+		if m.ReadJoypad != nil {
+			return byte(m.ReadJoypad())
+		}
+		return 0xFF
+	}
+	if address == 0x04000131 {
+		if m.ReadJoypad != nil {
+			return byte(m.ReadJoypad() >> 8)
+		}
+		return 0x0F
+	}
+	if address >= vramBase && address < vramBase+0x000A4000 {
+		offset := address - vramBase
+		return m.VRAM[offset]
+	}
+
 	if address < mainMemoryBase {
 		return 0
 	}
@@ -45,6 +69,12 @@ func (m *MemoryBus) Read32(address uint32) uint32 {
 }
 
 func (m *MemoryBus) Write8(address uint32, value byte) {
+	if address >= vramBase && address < vramBase+0x000A4000 {
+		offset := address - vramBase
+		m.VRAM[offset] = value
+		return
+	}
+	
 	if address < mainMemoryBase {
 		return
 	}

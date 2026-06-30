@@ -23,14 +23,17 @@ type NDS struct {
 }
 
 func NewNDS() (*NDS, error) {
+	gpuInst := gpu.NewGPU()
+	
 	nds := &NDS{
-		Memory:     memory.NewMemoryBus(),
-		GPU:        gpu.NewGPU(),
+		GPU:        gpuInst,
+		Memory:     memory.NewMemoryBus(gpuInst.VRAM, gpuInst.OAM),
 		Input:      input.NewController(),
 		Running:    false,
 		FrameCount: 0,
 	}
-
+	
+	nds.Memory.ReadJoypad = nds.Input.ReadJoypad
 	nds.ARM9 = cpu.NewARM9(nds.Memory)
 	nds.ARM7 = cpu.NewARM7(nds.Memory)
 
@@ -46,30 +49,37 @@ func (n *NDS) LoadCartridge(path string) error {
 	return nil
 }
 
-func (n *NDS) Run() error {
-	if n.ARM9 == nil || n.Memory == nil {
-		return errors.New("system: emulator is not initialized")
+func (n *NDS) InjectBoot() error {
+	if n.Cartridge == nil || len(n.Cartridge.Data) == 0 {
+		return errors.New("no cartridge loaded")
 	}
 
-	n.Running = true
+	if err := n.Cartridge.ParseHeader(); err != nil {
+		return err
+	}
 
-	const demoOpcode uint32 = 0xE1A00000 // NOP
-	n.Memory.Write32(0x02000000, demoOpcode)
+	hdr := n.Cartridge.Header
+	if uint32(len(n.Cartridge.Data)) < hdr.ARM9Offset+hdr.ARM9Size {
+		return errors.New("ROM is smaller than expected ARM9 size")
+	}
+
+	arm9Payload := n.Cartridge.Data[hdr.ARM9Offset : hdr.ARM9Offset+hdr.ARM9Size]
+
+	dest := hdr.ARM9RAMAddr
+	log.Printf("Injecting ARM9 Boot Payload of size %d bytes to 0x%08X", len(arm9Payload), dest)
+	for i := 0; i < len(arm9Payload); i++ {
+		n.Memory.Write8(dest+uint32(i), arm9Payload[i])
+	}
+
+	// Reset CPUs to put them in a clean state (Supervisor mode, interrupts disabled, etc)
 	n.ARM9.Reset()
 	n.ARM7.Reset()
 
-	// Step the ARM9
-	n.ARM9.Step()
+	// Override PC to the entry point
+	n.ARM9.R[15] = hdr.ARM9Entry
+	log.Printf("ARM9 PC Set to Entry Point: 0x%08X", hdr.ARM9Entry)
 
-	if n.GPU != nil {
-		n.GPU.UpdateFrame()
-	}
-	n.FrameCount++
-
-	log.Printf("demo step complete")
-
-	n.Stop()
-
+	n.Running = true
 	return nil
 }
 

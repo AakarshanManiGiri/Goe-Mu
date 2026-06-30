@@ -1,5 +1,7 @@
 package input
 
+import "github.com/hajimehoshi/ebiten/v2"
+
 type ButtonMask uint16
 
 const (
@@ -45,4 +47,24 @@ func (c *Controller) SetTouchInput(x, y int16, touching bool) {
 	c.TouchX = x
 	c.TouchY = y
 	c.IsTouching = touching
+}
+
+func (c *Controller) ReadJoypad() uint16 {
+	// NDS active-low joypad: 0=pressed, 1=released
+	var state uint16 = 0x0FFF // All released
+	
+	if ebiten.IsKeyPressed(ebiten.KeyZ) { state &^= (1 << 0) }
+	if ebiten.IsKeyPressed(ebiten.KeyX) { state &^= (1 << 1) }
+	if ebiten.IsKeyPressed(ebiten.KeyShift) { state &^= (1 << 2) }
+	if ebiten.IsKeyPressed(ebiten.KeyEnter) { state &^= (1 << 3) }
+	if ebiten.IsKeyPressed(ebiten.KeyRight) { state &^= (1 << 4) }
+	if ebiten.IsKeyPressed(ebiten.KeyLeft) { state &^= (1 << 5) }
+	if ebiten.IsKeyPressed(ebiten.KeyUp) { state &^= (1 << 6) }
+	if ebiten.IsKeyPressed(ebiten.KeyDown) { state &^= (1 << 7) }
+	if ebiten.IsKeyPressed(ebiten.KeyS) { state &^= (1 << 8) }
+	if ebiten.IsKeyPressed(ebiten.KeyA) { state &^= (1 << 9) }
+	if ebiten.IsKeyPressed(ebiten.KeyC) { state &^= (1 << 10) }
+	if ebiten.IsKeyPressed(ebiten.KeyV) { state &^= (1 << 11) }
+	
+	return state
 }
