@@ -56,6 +56,9 @@ type CPU struct {
 	// Look-up tables for instruction decoding
 	ARMLUT   [4096]func(uint32)
 	THUMBLUT [1024]func(uint16)
+
+	CP15 *CP15
+	SWICallback func(uint32)
 }
 
 func NewCPU(isARM9 bool, bus MemoryInterface) *CPU {
@@ -63,33 +66,15 @@ func NewCPU(isARM9 bool, bus MemoryInterface) *CPU {
 		IsARM9: isARM9,
 		Bus:    bus,
 	}
+	if isARM9 {
+		c.CP15 = &CP15{}
+	}
 	c.initLUTs()
 	return c
 }
 
 func (c *CPU) initLUTs() {
-	for i := 0; i < 4096; i++ {
-		c.ARMLUT[i] = c.unimplementedARM
-		if (i >> 9) == 0b101 {
-			c.ARMLUT[i] = c.handleBranch
-		}
-		if (i >> 10) == 0b00 {
-			c.ARMLUT[i] = c.handleDataProcessing
-		}
-		if (i >> 10) == 0b01 {
-			c.ARMLUT[i] = c.handleSingleDataTransfer
-		}
-		if (i >> 9) == 0b100 {
-			c.ARMLUT[i] = c.handleBlockDataTransfer
-		}
-	}
-	for i := 0; i < 1024; i++ {
-		c.THUMBLUT[i] = c.unimplementedTHUMB
-		// Format 18 (Unconditional branch): 11100 -> i >> 5 == 0b11100
-		if (i >> 5) == 0b11100 {
-			c.THUMBLUT[i] = c.handleThumbBranch
-		}
-	}
+	c.populateThumbLUT()
 }
 
 func (c *CPU) handleBranch(opcode uint32) {
@@ -328,9 +313,7 @@ func (c *CPU) Step() {
 			return
 		}
 
-		// Use bits 27-16 to index the 4096-entry ARM LUT
-		index := (opcode >> 16) & 0xFFF
-		c.ARMLUT[index](opcode)
+		c.decodeARM(opcode)
 	}
 }
 
@@ -377,3 +360,51 @@ func (c *CPU) checkCondition(cond uint32) bool {
 	}
 	return false
 }
+
+func (c *CPU) handleCoprocessorRegisterTransfer(opcode uint32) {
+	if c.CP15 == nil {
+		return // Ignore on ARM7
+	}
+	isMRC := (opcode & (1 << 20)) != 0
+	rd := (opcode >> 12) & 0xF
+	crn := (opcode >> 16) & 0xF
+	crm := opcode & 0xF
+	opc2 := (opcode >> 5) & 0x7
+
+	if !isMRC {
+		// MCR
+		val := c.R[rd]
+		if crn == 1 && crm == 0 && opc2 == 0 {
+			c.CP15.ControlRegister = val
+		} else if crn == 9 && crm == 1 && opc2 == 0 {
+			c.CP15.DTCMRegion = val
+		} else if crn == 9 && crm == 1 && opc2 == 1 {
+			c.CP15.ITCMRegion = val
+		}
+	} else {
+		// MRC (stubbed for now)
+		c.R[rd] = 0
+	}
+}
+
+func (c *CPU) handleSWI(opcode uint32) {
+	swiNum := opcode & 0x00FFFFFF
+	if c.SWICallback != nil {
+		c.SWICallback(swiNum)
+	}
+}
+
+func (c *CPU) handleBX(opcode uint32) {
+	rn := opcode & 0xF
+	addr := c.R[rn]
+	
+	if (addr & 1) != 0 {
+		c.CPSR |= 0x20 // Switch to Thumb
+		c.R[15] = addr & 0xFFFFFFFE
+	} else {
+		c.CPSR &^= 0x20 // Switch to ARM
+		c.R[15] = addr & 0xFFFFFFFC
+	}
+}
+
+

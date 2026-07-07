@@ -18,6 +18,8 @@ type NDS struct {
 	GPU        *gpu.GPU
 	Input      *input.Controller
 	Cartridge  *cartridge.Cartridge
+	Timers     *Timers
+	Interrupts *Interrupts
 	Running    bool
 	FrameCount uint64
 }
@@ -27,13 +29,17 @@ func NewNDS() (*NDS, error) {
 	
 	nds := &NDS{
 		GPU:        gpuInst,
-		Memory:     memory.NewMemoryBus(gpuInst.VRAM, gpuInst.OAM),
+		Memory:     memory.NewMemoryBus(gpuInst.VRAM, gpuInst.OAM, gpuInst.PaletteRAM),
 		Input:      input.NewController(),
+		Timers:     NewTimers(),
+		Interrupts: NewInterrupts(),
 		Running:    false,
 		FrameCount: 0,
 	}
 	
 	nds.Memory.ReadJoypad = nds.Input.ReadJoypad
+	nds.Memory.HW = nds.Interrupts
+	nds.Memory.GPU = nds.GPU
 	nds.ARM9 = cpu.NewARM9(nds.Memory)
 	nds.ARM7 = cpu.NewARM7(nds.Memory)
 
@@ -46,6 +52,8 @@ func (n *NDS) LoadCartridge(path string) error {
 	if err != nil {
 		return err
 	}
+	n.Memory.CartridgeData = n.Cartridge.Data
+	n.Memory.SPI = cartridge.NewSPI(n.Cartridge.Data)
 	return nil
 }
 

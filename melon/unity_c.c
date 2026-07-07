@@ -1,0 +1,7 @@
+#include "../logic/src/fatfs/ff.c"
+#include "../logic/src/fatfs/ffsystem.c"
+#include "../logic/src/fatfs/ffunicode.c"
+#include "../logic/src/sha1/sha1.c"
+#include "../logic/src/tiny-AES-c/aes.c"
+#include "../logic/src/xxhash/xxhash.c"
+#include "../logic/src/blip-buf/blip_buf.c"
